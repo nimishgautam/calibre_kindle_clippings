@@ -31,7 +31,7 @@ def authors_match(source: Optional[str], candidates: Iterable[str]) -> bool:
         return False
     for candidate in candidates:
         candidate_tokens = author_tokens(candidate)
-        if source_tokens.issubset(candidate_tokens) or candidate_tokens.issubset(source_tokens):
+        if candidate_tokens and (source_tokens.issubset(candidate_tokens) or candidate_tokens.issubset(source_tokens)):
             return True
     return False
 

@@ -1,6 +1,10 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
-from kindle_clippings_cli.config_store import ConfigStore
+from kindle_clippings_cli.config_store import ConfigStore, default_config_path
 from kindle_clippings_cli.matching import confident_match, rank_candidates
 from kindle_clippings_cli.models import BookAnnotations, CalibreBook
 from kindle_clippings_cli.parser import group_clippings, parse_bytes
@@ -26,6 +30,14 @@ The Valley of the Moon (Jack London)
 
 
 class ParserTests(unittest.TestCase):
+    def test_underlines_use_highlight_representation(self):
+        highlights, _ = parse_bytes(SAMPLE)
+        underlines, issues = parse_bytes(SAMPLE.replace(b"Your Highlight", b"Your Underline"))
+        self.assertEqual([], issues)
+        self.assertEqual("highlight", underlines[0].kind)
+        self.assertEqual(render_annotation(highlights[0]).html, render_annotation(underlines[0]).html)
+        self.assertEqual(render_annotation(highlights[0]).annotation_hash, render_annotation(underlines[0]).annotation_hash)
+
     def test_parse_and_group_kindle_clippings(self):
         clippings, issues = parse_bytes(SAMPLE)
 
@@ -43,6 +55,49 @@ class ParserTests(unittest.TestCase):
 
 
 class MatchingTests(unittest.TestCase):
+    def test_structured_titles_beat_unrelated_fuzzy_candidates(self):
+        cases = [
+            ("Practical Gardening", "Alex Morgan", "Practical Gardening: A Guide to Plants"),
+            ("Practical Gardening (Classic Edition)", "Morgan, Alex", "Practical Gardening"),
+            ("Practical Gardening - Alex Morgan", None, "Practical Gardening"),
+            ("Garden, The - Alex Morgan", None, "The Garden"),
+            ("Practical Gardening_ A Guide - Alex Morgan", None, "Practical Gardening: A Guide"),
+            ("Practical Gardening: The Basics", "Alex Morgan", "Practical Gardening: The Basics: An Illustrated Guide"),
+        ]
+        for title, author, target in cases:
+            with self.subTest(title=title):
+                source = BookAnnotations(key="x", title=title, author=author)
+                candidates = rank_candidates(source, [
+                    CalibreBook(book_id=1, title="Gardens and Plants", authors=["Someone Else"]),
+                    CalibreBook(book_id=2, title=target, authors=["Alex Morgan"]),
+                ])
+                self.assertEqual(2, confident_match(candidates).book.book_id)
+
+    def test_uncertain_editions_and_authors_require_a_choice(self):
+        cases = [
+            ("Practical Gardening: Summary", "Alex Morgan", "Practical Gardening", "Alex Morgan"),
+            ("A Comprehensive Guide to Growing Flowers and Vegetables: Summary", "Alex Morgan", "A Comprehensive Guide to Growing Flowers and Vegetables", "Alex Morgan"),
+            ("Practical Gardening: Volume III", "Alex Morgan", "Practical Gardening", "Alex Morgan"),
+            ("Garden", "Alex Morgan", "Garden: A Guide to Plants", "Alex Morgan"),
+            ("Practical Gardening: Flowers", "Alex Morgan", "Practical Gardening: Vegetables", "Alex Morgan"),
+            ("Practical Gardening", "Alex Morgan", "Practical Gardening: A Guide", "Taylor Smith"),
+            ("Practical Gardening", "Alex Morgan", "Practical Gardening: A Guide", ""),
+        ]
+        for title, author, target, target_author in cases:
+            with self.subTest(title=title, target_author=target_author):
+                candidates = rank_candidates(BookAnnotations(key="x", title=title, author=author), [
+                    CalibreBook(book_id=2, title=target, authors=[target_author]),
+                ])
+                self.assertIsNone(confident_match(candidates))
+
+    def test_multiple_editions_remain_ambiguous(self):
+        source = BookAnnotations(key="x", title="Practical Gardening", author="Alex Morgan")
+        candidates = rank_candidates(source, [
+            CalibreBook(book_id=1, title="Practical Gardening: First Edition", authors=["Alex Morgan"]),
+            CalibreBook(book_id=2, title="Practical Gardening: Second Edition", authors=["Alex Morgan"]),
+        ])
+        self.assertIsNone(confident_match(candidates))
+
     def test_ranks_exact_title_and_author_as_confident(self):
         source = BookAnnotations(key="x", title="The Valley of the Moon", author="Jack London")
         books = [
@@ -90,6 +145,18 @@ class RenderTests(unittest.TestCase):
 
 
 class ConfigStoreTests(unittest.TestCase):
+    def test_xdg_config_and_library_specific_mapping_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}):
+                self.assertEqual(Path(directory) / "calibre-kindle-clippings/config.json", default_config_path())
+                store = ConfigStore()
+                store.set_mapping("/library", "summary|writer", 42, "Summary", "Writer", "Original", ["Writer"])
+                store.save()
+                restored = ConfigStore()
+                restored.load()
+                self.assertEqual(42, restored.get_mapping("/library", "summary|writer"))
+                self.assertIsNone(restored.get_mapping("/other-library", "summary|writer"))
+
     def test_mapping_supports_readable_records_and_old_integer_values(self):
         store = ConfigStore()
         store.data = {}

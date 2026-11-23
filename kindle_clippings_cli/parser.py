@@ -10,9 +10,11 @@ from .text import normalize_text
 
 _LANG_AND_KIND_DETECT_BY_START_WORDS = {
     "Your Highlight": ("en", "highlight"),
+    "Your Underline": ("en", "highlight"),
     "Your Note": ("en", "note"),
     "Your Bookmark": ("en", "bookmark"),
     "Highlight": ("en", "highlight"),
+    "Underline": ("en", "highlight"),
     "Note": ("en", "note"),
     "Bookmark": ("en", "bookmark"),
     "Ihre Markierung": ("de", "highlight"),
